@@ -9,11 +9,10 @@ from llama_stack_client import LlamaStackClient
 from llama_stack_client.lib.agents.agent import Agent
 import tools as tool
 
-# Load environment variables
 load_dotenv()
 
 def get_tool_name(response: QueryChunksResponse):
-    tool_name = response.chunks[0].content
+    tool_name = response.chunks[0].metadata["tool_name"]
 
     return tool_name
 
@@ -157,10 +156,8 @@ def run_client_tool_test(model, vector_db_id, query_obj, llama_client, logger):
             model=model,
             tools=[tool_to_use],
         )
-        # Get Tool execution and Inference steps
         steps = response.steps
 
-        #Get tool used
         try:
             tools_used = steps[1].tool_calls[0].tool_name
         except Exception as e:
@@ -169,7 +166,6 @@ def run_client_tool_test(model, vector_db_id, query_obj, llama_client, logger):
         tool_call_match = True if tools_used == expected_tool_call else False
         logger.info(f"Tool used: {tools_used} Tool expected: {expected_tool_call} match: {tool_call_match} ")
 
-        #Check inference was not empty
         final_response = ""
         try:
             final_response = steps[2].api_model_response.content.strip()
@@ -180,7 +176,6 @@ def run_client_tool_test(model, vector_db_id, query_obj, llama_client, logger):
         logger.info(f'Inference not empty: {inference_not_empty}')
         logger.info(f"Query '{query_id}' succeeded with model {model} and the response \n {final_response}")
 
-        # Record success metrics, including the expected_tool_call
         utils.add_client_tool_call_metric(
             model=model,
             query_id=query_id,
@@ -196,7 +191,6 @@ def run_client_tool_test(model, vector_db_id, query_obj, llama_client, logger):
         error_msg = str(e)
         logger.error(f"Query '{query_id}' failed with model {model}: {error_msg}")
 
-        # Record failure metrics
         utils.add_client_tool_call_metric(
             model=model,
             query_id=query_id,
@@ -209,19 +203,12 @@ def run_client_tool_test(model, vector_db_id, query_obj, llama_client, logger):
 
         return False
 
-def insert_tool_embedding(tool_name, vector_db_id: str, client: LlamaStackClient):
+def insert_tool_embedding(tool_name, tool_use_case, vector_db_id: str, client: LlamaStackClient):
     chunk = {
-        "content": tool_name,
+        "content": tool_use_case,
         "mime_type": "text/plain",
         "metadata": {
-            # "tool_prompt_format": {
-            # "type": "function",
-            # "function" : {
-            #     "name": tool_name,
-            #     "description": tool_description,
-            #     "parameters": tool_params
-            #     }
-            # },
+            "tool_name": tool_name,
             "document_id": tool_name
         }
     }
@@ -231,12 +218,58 @@ def insert_tool_embedding(tool_name, vector_db_id: str, client: LlamaStackClient
 def fill_vector_db(vector_db_id: str, client: LlamaStackClient, queries):
     query_set = set()
 
+    tool_use_case = {
+        "add_two_numbers": "Use when the user wants to find the sum, total, or combined value of two numbers.",
+        "subtract_two_numbers": "Use when the user wants to find the difference, subtract one number from another, or determine how much is left after removal.",
+        "multiply_two_numbers": "Use when the user wants to find the product, multiply values, or scale a quantity.",
+        "divide_two_numbers": "Use when the user wants to find the quotient, ratio, or split a quantity. Handles division by zero.",
+        "get_current_date": "Use when the user asks for \"today's date\", \"current date\", or similar date inquiries.",
+        "greet_user": "Use when the user provides a name and a greeting is implied or explicitly requested.",
+        "string_length": "Use when the user asks for the \"length of\", \"character count\", or \"how many characters\" in a text.",
+        "to_uppercase": "Use when the user requests \"all caps\", \"uppercase\", or to \"capitalize everything\".",
+        "to_lowercase": "Use when the user requests \"all small letters\", \"lowercase\", or to \"un-capitalize everything\".",
+        "reverse_string": "Use when the user asks to \"reverse a string\", \"spell backwards\", or \"flip text\".",
+        "is_even": "Use when the user asks \"is this number even?\" or to \"check for evenness\".",
+        "is_odd": "Use when the user asks \"is this number odd?\" or to \"check for oddness\".",
+        "get_max_of_two": "Use when the user asks for the \"maximum\", \"larger\", or \"greater\" of two values.",
+        "get_min_of_two": "Use when the user asks for the \"minimum\", \"smaller\", or \"lesser\" of two values.",
+        "concatenate_strings": "Use when the user asks to \"combine strings\", \"join text\", or \"put together words\".",
+        "is_palindrome": "Use when the user asks \"is it a palindrome?\" or to \"check for palindrome\". Ignores case and non-alphanumeric characters.",
+        "calculate_square_root": "Use when the user asks for the \"square root of\", \"sqrt\", or \"what number multiplied by itself equals X\".",
+        "power": "Use when the user asks for \"X to the power of Y\", \"X raised to Y\", or \"exponentiation\".",
+        "get_day_of_week": "Use when the user asks \"what day of the week is X date?\" or wants to know the weekday of a specific past or future date.",
+        "email_validator": "Use when the user asks \"is this a valid email?\" or needs to verify an email's structure.",
+        "count_words": "Use when the user asks \"how many words are in this text?\" or needs a word count.",
+        "average_two_numbers": "Use when the user wants to find the \"average\" or \"mean\" of two numerical values.",
+        "remove_whitespace": "Use when the user asks to \"remove spaces\" or \"strip whitespace\" from text.",
+        "convert_celsius_to_kelvin": "Use this tool when the user explicitly asks to convert a temperature FROM Celsius TO Kelvin. Look for keywords like 'Celsius to Kelvin', 'C to K', or 'convert NUM C to K'.",
+        "convert_fahrenheit_to_kelvin": "Use this tool when the user explicitly asks to convert a temperature FROM Fahrenheit TO Kelvin. Look for keywords like 'Fahrenheit to Kelvin', 'F to K', or 'convert NUM F to K'.",
+        "convert_celsius_to_fahrenheit": "Use this tool when the user explicitly asks to convert a temperature FROM Celsius TO Fahrenheit. Look for keywords like 'Celsius in Fahrenheit', 'C to F', or 'convert NUM C to F'.",
+        "convert_fahrenheit_to_celsius": "Use this tool when the user explicitly asks to convert a temperature FROM Fahrenheit TO Celsius. Look for keywords like 'Fahrenheit to Celsius', 'F to C', or 'convert NUM F to C'.",
+        "get_substring": "Use when the user asks to \"get part of a string\" or \"extract text from index X to Y\".",
+        "round_number": "Use when the user asks to \"round a number\" or \"truncate to X decimal places\".",
+        "is_leap_year": "Use when the user asks \"is X year a leap year?\" or needs to determine leap year status.",
+        "generate_random_integer": "Use when the user asks for a \"random number between X and Y\".",
+        "get_file_extension": "Use when the user asks \"what's the file extension of X?\" or needs to parse a filename.",
+        "replace_substring": "Use when the user asks to \"replace text\", \"find and replace\", or \"change X to Y in a string\".",
+        "is_prime": "Use when the user asks \"is X a prime number?\" or needs to check for primality.",
+        "calculate_bmi": "Use when the user asks to \"calculate BMI\".",
+        "convert_kilograms_to_pounds": "Use when the user asks for \"kilograms to pounds conversion\" or needs to convert weight units.",
+        "convert_pounds_to_kilograms": "Use when the user asks for \"pounds to kilograms conversion\" or needs to convert weight units.",
+        "convert_meters_to_feet": "Use when the user asks for \"meters to feet conversion\" or needs to convert length units.",
+        "convert_feet_to_meters": "Use when the user asks for \"feet to meters conversion\" or needs to convert length units.",
+        "is_alphanumeric": "Use when the user asks \"is this string alphanumeric?\" or needs to validate input containing only letters and numbers.",
+        "url_encode": "Use when the user needs to \"URL encode\" text for web parameters or links.",
+        "url_decode": "Use when the user needs to \"URL decode\" text from web parameters or links."
+    }
+
     for query in queries:
         tool_name = query["tool_call"]
 
         if tool_name not in query_set:
             insert_tool_embedding(
                 tool_name=tool_name,
+                tool_use_case=tool_use_case[tool_name],
                 vector_db_id=vector_db_id,
                 client=client
             )
@@ -257,7 +290,8 @@ def main():
             #  "ibm-granite/granite-3.2-8b-instruct",]
             #   "watt-ai/watt-tool-8B",
             #   "meta-llama/Llama-3.3-70B-Instruct"]
-    vector_db_id = "tool_name_test_vdb" # tool_use_case_test_vdb
+
+    vector_db_id = "tool_use_case_test_vdb" # tool_use_case_test_vdb tool_name_test_vdb
     emodels = llama_client.models.list()
     embedding_model = (
         em := next(m for m in emodels if m.model_type == "embedding")
@@ -300,7 +334,6 @@ def main():
             if success:
                 successful_tests += 1
 
-    # Print summary
     logger.info(f"\n=== Test Summary ===")
     logger.info(f"Total tests: {total_tests}")
     logger.info(f"Successful tests: {successful_tests}")
